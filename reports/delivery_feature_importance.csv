@@ -1,0 +1,16 @@
+Feature,Importance
+cat__customer_state_SP,0.084156
+num__purchase_year,0.082515225
+cat__customer_state_RJ,0.058322717
+cat__customer_state_MG,0.03706819
+num__purchase_month,0.036600947
+cat__customer_state_PR,0.030677358
+cat__seller_state_SP,0.022854812
+cat__customer_state_AL,0.020343648
+cat__seller_state_RJ,0.019341407
+cat__customer_state_BA,0.019159911
+num__estimated_delivery_days,0.016819788
+num__total_freight,0.016108438
+cat__customer_state_CE,0.015336871
+num__item_count,0.014559264
+cat__customer_state_PE,0.013785676
