@@ -2,20 +2,26 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import joblib
 from pathlib import Path
 
-# Project paths
+# --------------------------------------------------
+# PROJECT SETTINGS
+# --------------------------------------------------
+
 BASE_DIR = Path(__file__).resolve().parent
 REPORTS = BASE_DIR / "reports"
+MODELS = BASE_DIR / "models"
 
-# Page configuration
 st.set_page_config(
     page_title="ShopSense AI",
     page_icon="🛒",
     layout="wide"
 )
 
-# Dark dashboard styling
+# --------------------------------------------------
+# DARK THEME
+# --------------------------------------------------
 
 st.markdown("""
 <style>
@@ -23,48 +29,34 @@ st.markdown("""
     background: linear-gradient(135deg, #081827, #102b3f, #0b1f30);
     color: #e2f1f5;
 }
-
 [data-testid="stSidebar"] {
     background-color: #0b2030;
     border-right: 1px solid #164e63;
 }
-
 [data-testid="stMetric"] {
     background: linear-gradient(145deg, #123247, #164e63);
     padding: 18px;
     border-radius: 14px;
     border: 1px solid #0e7490;
 }
-
 [data-testid="stMetricLabel"] {
     color: #67e8f9;
 }
-
 [data-testid="stMetricValue"] {
-    color: #ffffff;
+    color: white;
 }
-
 h1, h2, h3 {
     color: #67e8f9;
-}
-
-.stButton > button {
-    background-color: #0d9488;
-    color: white;
-    border: 1px solid #2dd4bf;
-    border-radius: 10px;
-}
-
-.stButton > button:hover {
-    background-color: #14b8a6;
-    color: white;
-    border: 1px solid #67e8f9;
 }
 </style>
 """, unsafe_allow_html=True)
 
 
+# --------------------------------------------------
+# HELPER FUNCTIONS
+# --------------------------------------------------
 
+@st.cache_data
 def load_csv(filename):
     path = REPORTS / filename
     if path.exists():
@@ -72,15 +64,35 @@ def load_csv(filename):
     return None
 
 
-def show_image(filename, caption):
-    path = REPORTS / filename
-    if path.exists():
-        st.image(str(path), caption=caption, use_container_width=True)
-    else:
-        st.info(f"{filename} is not available yet.")
+def find_column(df, keyword):
+    """Find a column using a keyword, ignoring case."""
+    if df is None:
+        return None
+
+    for column in df.columns:
+        if keyword.lower() in str(column).lower():
+            return column
+
+    return None
 
 
-# Sidebar navigation
+def show_table(df, rows=200):
+    if df is not None and not df.empty:
+        st.dataframe(
+            df.head(rows),
+            use_container_width=True,
+            hide_index=True
+        )
+
+
+def money(value):
+    return f"R$ {value:,.0f}"
+
+
+# --------------------------------------------------
+# SIDEBAR
+# --------------------------------------------------
+
 st.sidebar.title("🛒 ShopSense AI")
 st.sidebar.caption("E-Commerce Intelligence Platform")
 
@@ -101,11 +113,15 @@ st.sidebar.divider()
 st.sidebar.caption("Built with Python, Machine Learning & Streamlit")
 
 
-# OVERVIEW PAGE
+# ==================================================
+# 1. OVERVIEW
+# ==================================================
+
 if page == "Overview":
 
     st.title("🛒 ShopSense AI")
     st.subheader("E-Commerce Intelligence Dashboard")
+
     st.write(
         "Analyze sales, understand customers, predict delivery delays "
         "and discover unusual order patterns."
@@ -119,16 +135,18 @@ if page == "Overview":
     col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Dataset", "Olist")
+
     col2.metric(
         "Recommendations",
         f"{len(recommendations):,}" if recommendations is not None else "N/A"
     )
-    col3.metric(
-        "Unusual Orders",
-        f"{(anomalies['Anomaly'] == 'Unusual').sum():,}"
-        if anomalies is not None and "Anomaly" in anomalies.columns
-        else "N/A"
-    )
+
+    if anomalies is not None and "Anomaly" in anomalies.columns:
+        unusual = (anomalies["Anomaly"] == "Unusual").sum()
+        col3.metric("Unusual Orders", f"{unusual:,}")
+    else:
+        col3.metric("Unusual Orders", "N/A")
+
     col4.metric(
         "Customers Analyzed",
         f"{len(rfm):,}" if rfm is not None else "N/A"
@@ -151,143 +169,156 @@ if page == "Overview":
     st.subheader("Sales Forecast Preview")
 
     if sales is not None:
-        st.dataframe(sales, use_container_width=True)
+        show_table(sales)
     else:
         st.warning("Sales forecast report not found.")
 
-    st.subheader("Project Visualizations")
-    show_image("monthly_orders.png", "Monthly Orders")
-    show_image("rfm_segments.png", "Customer Segments")
+    if sales is not None and "Forecast Sales (BRL)" in sales.columns:
+        fig = px.bar(
+            sales,
+            x="Month",
+            y="Forecast Sales (BRL)",
+            title="Monthly Sales Forecast"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    if anomalies is not None and "Anomaly" in anomalies.columns:
+        counts = anomalies["Anomaly"].value_counts().reset_index()
+        counts.columns = ["Order Type", "Count"]
+
+        fig = px.pie(
+            counts,
+            names="Order Type",
+            values="Count",
+            hole=0.4,
+            title="Order Anomaly Distribution"
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 
-# SALES FORECASTING PAGE
+# ==================================================
+# 2. SALES FORECASTING
+# ==================================================
 
-# SALES FORECASTING PAGE
 elif page == "Sales Forecasting":
 
     st.title("📊 Sales Intelligence & Forecasting")
-    st.write("Analyze historical sales and explore experimental forecasts.")
+    st.write("Explore historical sales performance and experimental forecasts.")
 
     evaluation = load_csv("sales_model_evaluation.csv")
     forecast = load_csv("sales_forecast.csv")
 
     if evaluation is not None and not evaluation.empty:
 
-        st.subheader("📈 Model Performance")
+        st.subheader("📈 Actual vs Predicted Sales")
 
-        actual_col = "Actual Sales"
-        predicted_col = "Predicted Sales"
+        if {"Month", "Actual Sales", "Predicted Sales"}.issubset(evaluation.columns):
 
-        if actual_col in evaluation.columns and predicted_col in evaluation.columns:
+            months = ["All Months"] + evaluation["Month"].astype(str).tolist()
+
+            selected_month = st.selectbox(
+                "Select Test Month",
+                months,
+                key="sales_month_filter"
+            )
+
+            filtered = evaluation.copy()
+
+            if selected_month != "All Months":
+                filtered = filtered[
+                    filtered["Month"].astype(str) == selected_month
+                ]
 
             mae = (
-                evaluation[actual_col] - evaluation[predicted_col]
+                filtered["Actual Sales"] - filtered["Predicted Sales"]
             ).abs().mean()
 
-            total_actual = evaluation[actual_col].sum()
-            total_predicted = evaluation[predicted_col].sum()
-
             c1, c2, c3 = st.columns(3)
+            c1.metric("Selected Test Months", len(filtered))
+            c2.metric("Mean Absolute Error", money(mae))
+            c3.metric("Actual Sales", money(filtered["Actual Sales"].sum()))
 
-            c1.metric("Test Months", len(evaluation))
-            c2.metric("Mean Absolute Error", f"₹{mae:,.0f}")
-            c3.metric("Actual Test Sales", f"₹{total_actual:,.0f}")
-
-            st.subheader("Actual vs Predicted Sales")
-
-            chart_data = evaluation.melt(
+            chart_data = filtered.melt(
                 id_vars="Month",
-                value_vars=[actual_col, predicted_col],
+                value_vars=["Actual Sales", "Predicted Sales"],
                 var_name="Sales Type",
                 value_name="Sales"
             )
 
-            fig = px.line(
+            fig = px.bar(
                 chart_data,
                 x="Month",
                 y="Sales",
                 color="Sales Type",
-                markers=True,
-                title="Monthly Actual vs Predicted Sales"
+                barmode="group",
+                title="Actual vs Predicted Sales"
             )
 
             st.plotly_chart(fig, use_container_width=True)
+            show_table(filtered)
 
-            st.dataframe(
-                evaluation,
-                use_container_width=True,
-                hide_index=True
-            )
+        else:
+            st.warning("Required sales evaluation columns are missing.")
+
+    else:
+        st.warning("Sales evaluation report not found.")
+
+    st.divider()
+    st.subheader("🔮 Experimental Sales Forecast")
 
     if forecast is not None and not forecast.empty:
 
-        st.divider()
-        st.subheader("🔮 Experimental Sales Forecast")
+        if {"Month", "Forecast Sales (BRL)"}.issubset(forecast.columns):
 
-        if "Forecast Sales (BRL)" in forecast.columns:
+            forecast_months = ["All Months"] + forecast["Month"].astype(str).tolist()
 
-            total_forecast = forecast["Forecast Sales (BRL)"].sum()
-            average_forecast = forecast["Forecast Sales (BRL)"].mean()
+            selected_forecast_month = st.selectbox(
+                "Select Forecast Month",
+                forecast_months,
+                key="forecast_month_filter"
+            )
+
+            forecast_filtered = forecast.copy()
+
+            if selected_forecast_month != "All Months":
+                forecast_filtered = forecast_filtered[
+                    forecast_filtered["Month"].astype(str)
+                    == selected_forecast_month
+                ]
 
             c1, c2 = st.columns(2)
-            c1.metric("Forecast Total", f"₹{total_forecast:,.0f}")
-            c2.metric("Average Forecast", f"₹{average_forecast:,.0f}")
+            c1.metric(
+                "Forecast Total",
+                money(forecast_filtered["Forecast Sales (BRL)"].sum())
+            )
+            c2.metric(
+                "Average Forecast",
+                money(forecast_filtered["Forecast Sales (BRL)"].mean())
+            )
 
             fig = px.bar(
-                forecast,
+                forecast_filtered,
                 x="Month",
                 y="Forecast Sales (BRL)",
                 title="Forecasted Monthly Sales"
             )
 
             st.plotly_chart(fig, use_container_width=True)
+            show_table(forecast_filtered)
 
-        st.dataframe(
-            forecast,
-            use_container_width=True,
-            hide_index=True
-        )
+        else:
+            show_table(forecast)
 
     st.info(
-        "Note: This forecast uses historical Olist data ending in 2018. "
-        "It is an academic forecasting experiment, not a live 2026 sales forecast."
+        "This forecast uses historical Olist data ending in 2018. "
+        "It is an experimental historical forecast, not a live 2026 forecast."
     )
 
 
-    st.title("📊 Sales Forecasting")
+# ==================================================
+# 3. CUSTOMER SEGMENTATION
+# ==================================================
 
-    evaluation = load_csv("sales_model_evaluation.csv")
-    forecast = load_csv("sales_forecast.csv")
-
-    if evaluation is not None:
-        st.subheader("Actual vs Predicted Sales")
-        st.dataframe(evaluation, use_container_width=True)
-
-        if {"Month", "Actual Sales", "Predicted Sales"}.issubset(evaluation.columns):
-            chart_data = evaluation.melt(
-                id_vars="Month",
-                value_vars=["Actual Sales", "Predicted Sales"],
-                var_name="Sales Type",
-                value_name="Sales"
-            )
-            fig = px.line(
-                chart_data,
-                x="Month",
-                y="Sales",
-                color="Sales Type",
-                markers=True,
-                title="Actual vs Predicted Sales"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    if forecast is not None:
-        st.subheader("Future Forecast")
-        st.dataframe(forecast, use_container_width=True)
-
-
-# CUSTOMER SEGMENTATION PAGE
-
-# CUSTOMER SEGMENTATION PAGE
 elif page == "Customer Segmentation":
 
     st.title("👥 Customer Segmentation")
@@ -298,27 +329,27 @@ elif page == "Customer Segmentation":
 
     if summary is not None:
         st.subheader("📊 RFM Segment Summary")
-        st.dataframe(summary, use_container_width=True)
+        show_table(summary)
 
     if rfm is not None and not rfm.empty:
 
-        st.subheader("🔎 Customer Search & Segment Filter")
-
-        segment_column = next(
-            (c for c in rfm.columns if "segment" in c.lower()),
-            None
-        )
+        segment_column = find_column(rfm, "segment")
+        customer_column = find_column(rfm, "customer")
+        monetary_column = find_column(rfm, "monetary")
+        frequency_column = find_column(rfm, "frequency")
 
         filtered = rfm.copy()
 
         if segment_column:
+
             segments = sorted(
                 rfm[segment_column].dropna().astype(str).unique()
             )
 
             selected_segment = st.selectbox(
                 "Select Customer Segment",
-                ["All Segments"] + segments
+                ["All Segments"] + segments,
+                key="rfm_segment_filter"
             )
 
             if selected_segment != "All Segments":
@@ -326,21 +357,17 @@ elif page == "Customer Segmentation":
                     filtered[segment_column].astype(str) == selected_segment
                 ]
 
-        customer_column = next(
-            (c for c in rfm.columns if "customer" in c.lower()),
-            None
-        )
-
         if customer_column:
-            customer_search = st.text_input(
+
+            search = st.text_input(
                 "Search Customer ID",
                 placeholder="Enter customer ID..."
             )
 
-            if customer_search.strip():
+            if search.strip():
                 filtered = filtered[
                     filtered[customer_column].astype(str).str.contains(
-                        customer_search.strip(),
+                        search.strip(),
                         case=False,
                         na=False
                     )
@@ -348,52 +375,60 @@ elif page == "Customer Segmentation":
 
         st.metric("Matching Customers", f"{len(filtered):,}")
 
-        st.dataframe(
-            filtered.head(200),
-            use_container_width=True,
-            hide_index=True
-        )
+        st.subheader("📊 Filtered Customer Data")
+        show_table(filtered)
+
+        st.subheader("📈 Customer Segment Chart")
+
+        if segment_column:
+
+            segment_counts = (
+                filtered[segment_column]
+                .astype(str)
+                .value_counts()
+                .reset_index()
+            )
+            segment_counts.columns = ["Segment", "Customers"]
+
+            fig = px.bar(
+                segment_counts,
+                x="Segment",
+                y="Customers",
+                title="Customers by Selected Segment"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+        if monetary_column and frequency_column:
+
+            fig = px.scatter(
+                filtered,
+                x=frequency_column,
+                y=monetary_column,
+                color=segment_column if segment_column else None,
+                title="Customer Frequency vs Monetary Value"
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
 
     else:
         st.warning("RFM customer data not found.")
 
-    st.subheader("Customer Visualizations")
 
-    show_image("rfm_segments.png", "RFM Customer Segments")
-    show_image("rfm_monetary.png", "Customer Monetary Value")
+# ==================================================
+# 4. DELIVERY PREDICTION
+# ==================================================
 
-
-    st.title("👥 Customer Segmentation")
-
-    rfm = load_csv("rfm_customers.csv")
-    summary = load_csv("rfm_summary.csv")
-
-    if summary is not None:
-        st.subheader("RFM Segment Summary")
-        st.dataframe(summary, use_container_width=True)
-
-    if rfm is not None:
-        st.subheader("Customer RFM Data")
-        st.dataframe(rfm.head(100), use_container_width=True)
-
-    show_image("rfm_segments.png", "RFM Customer Segments")
-    show_image("rfm_monetary.png", "Customer Monetary Value")
-
-
-# DELIVERY PREDICTION PAGE
-
-# DELIVERY PREDICTION PAGE
 elif page == "Delivery Prediction":
 
     st.title("🚚 Delivery Delay Prediction")
-    st.write("Explore delivery model results and important prediction features.")
+    st.write("Explore model results and try a live delivery prediction.")
 
-    # LIVE DELIVERY PREDICTION
-    import joblib
+    st.subheader("🚀 Live Delivery Prediction")
 
-    st.divider()
-    st.subheader("🚀 Try Live Delivery Prediction")
-    st.caption("Enter order details to estimate the probability of delivery delay.")
+    st.caption(
+        "Enter order details to estimate the probability of delivery delay."
+    )
 
     with st.form("delivery_prediction_form"):
 
@@ -420,8 +455,9 @@ elif page == "Delivery Prediction":
         submitted = st.form_submit_button("Predict Delivery Status")
 
     if submitted:
+
         try:
-            model_path = BASE_DIR / "models" / "delivery_xgboost_model.joblib"
+            model_path = MODELS / "delivery_xgboost_model.joblib"
             model_bundle = joblib.load(model_path)
 
             input_data = pd.DataFrame([{
@@ -447,7 +483,10 @@ elif page == "Delivery Prediction":
             probability = pipeline.predict_proba(input_data)[0][1]
             prediction = int(probability >= threshold)
 
-            st.metric("Estimated Late Delivery Probability", f"{probability:.2%}")
+            st.metric(
+                "Estimated Late Delivery Probability",
+                f"{probability:.2%}"
+            )
 
             if prediction == 1:
                 st.warning("Model Prediction: Possible Delivery Delay")
@@ -457,33 +496,31 @@ elif page == "Delivery Prediction":
             st.caption(f"Classification threshold: {threshold:.4f}")
 
         except FileNotFoundError:
-            st.error("Model file not found. Please check the models folder.")
+            st.error("Model file not found in the models folder.")
         except Exception as error:
             st.error(f"Prediction error: {error}")
 
+    st.divider()
 
     predictions = load_csv("delivery_xgboost_predictions.csv")
     importance = load_csv("delivery_feature_importance.csv")
 
     if predictions is not None and not predictions.empty:
 
-        st.subheader("📊 Prediction Overview")
+        st.subheader("📊 Prediction Results")
 
-        col1, col2 = st.columns(2)
-        col1.metric("Total Predictions", f"{len(predictions):,}")
-        col2.metric("Available Features", f"{len(predictions.columns):,}")
-
-        st.subheader("🔎 Search Predictions")
+        st.metric("Total Predictions", f"{len(predictions):,}")
 
         search = st.text_input(
-            "Search in prediction results",
+            "Search Prediction Records",
             placeholder="Enter an order ID or value..."
         )
 
-        filtered = predictions.copy()
+        filtered_predictions = predictions.copy()
 
         if search.strip():
-            mask = filtered.astype(str).apply(
+
+            mask = filtered_predictions.astype(str).apply(
                 lambda column: column.str.contains(
                     search.strip(),
                     case=False,
@@ -491,321 +528,274 @@ elif page == "Delivery Prediction":
                 )
             ).any(axis=1)
 
-            filtered = filtered[mask]
+            filtered_predictions = filtered_predictions[mask]
 
-        st.caption(f"Showing {len(filtered):,} matching records")
+        st.caption(f"Matching records: {len(filtered_predictions):,}")
+        show_table(filtered_predictions)
 
-        st.dataframe(
-            filtered.head(200),
-            use_container_width=True,
-            hide_index=True
-        )
+    if importance is not None and not importance.empty:
 
-    else:
-        st.warning("Delivery prediction file not found.")
+        st.subheader("⭐ Model Feature Importance")
 
-    st.subheader("⭐ Model Feature Importance")
+        feature_column = find_column(importance, "feature")
+        importance_column = find_column(importance, "importance")
 
-    if importance is not None:
-        st.dataframe(
-            importance.head(15),
-            use_container_width=True
-        )
+        if feature_column and importance_column:
 
-    show_image(
-        "delivery_feature_importance.png",
-        "Delivery Model Feature Importance"
+            top_features = importance.sort_values(
+                importance_column,
+                ascending=False
+            ).head(15)
+
+            fig = px.bar(
+                top_features,
+                x=importance_column,
+                y=feature_column,
+                orientation="h",
+                title="Top 15 Important Features"
+            )
+
+            fig.update_layout(yaxis={"categoryorder": "total ascending"})
+            st.plotly_chart(fig, use_container_width=True)
+
+        show_table(importance, 15)
+
+    st.info(
+        "The model provides experimental estimates. Its test performance is modest "
+        "and predictions should not be treated as guaranteed delivery outcomes."
     )
 
 
-    st.title("🚚 Delivery Delay Prediction")
+# ==================================================
+# 5. RETENTION ANALYSIS
+# ==================================================
 
-    show_image(
-        "delivery_feature_importance.png",
-        "Delivery Model Feature Importance"
-    )
-
-    predictions = load_csv("delivery_xgboost_predictions.csv")
-
-    if predictions is not None:
-        st.subheader("Model Predictions")
-        st.dataframe(predictions.head(100), use_container_width=True)
-    else:
-        st.info("Delivery prediction report is not available.")
-
-
-# RETENTION PAGE
-
-# RETENTION ANALYSIS PAGE
 elif page == "Retention Analysis":
 
     st.title("🔄 Customer Retention Analysis")
-    st.write("Understand how customer activity changes across purchase cohorts.")
+    st.write("Explore how customer activity changes across purchase cohorts.")
 
     cohort = load_csv("cohort_retention.csv")
 
     if cohort is not None and not cohort.empty:
 
-        st.subheader("📊 Cohort Retention Data")
-
         st.metric("Cohort Records", f"{len(cohort):,}")
 
-        st.dataframe(
-            cohort,
-            use_container_width=True,
-            hide_index=True
-        )
+        cohort_column = find_column(cohort, "cohort")
+        index_column = find_column(cohort, "cohort_index")
+        retention_column = find_column(cohort, "retention")
 
-        st.subheader("🔎 Filter Cohorts")
-
-        cohort_column = next(
-            (c for c in cohort.columns if "cohort" in c.lower()),
-            None
-        )
+        filtered_cohort = cohort.copy()
 
         if cohort_column:
+
             cohort_values = sorted(
                 cohort[cohort_column].dropna().astype(str).unique()
             )
 
             selected_cohort = st.selectbox(
-                "Select Cohort",
-                ["All Cohorts"] + cohort_values
+                "Select Customer Cohort",
+                ["All Cohorts"] + cohort_values,
+                key="retention_cohort_filter"
             )
-
-            filtered = cohort.copy()
 
             if selected_cohort != "All Cohorts":
-                filtered = filtered[
-                    filtered[cohort_column].astype(str) == selected_cohort
+                filtered_cohort = filtered_cohort[
+                    filtered_cohort[cohort_column].astype(str)
+                    == selected_cohort
                 ]
 
-            st.dataframe(
-                filtered,
-                use_container_width=True,
-                hide_index=True
+        st.subheader("📊 Filtered Cohort Data")
+        show_table(filtered_cohort)
+
+        st.subheader("📈 Interactive Retention Chart")
+
+        if index_column and retention_column:
+
+            fig = px.line(
+                filtered_cohort,
+                x=index_column,
+                y=retention_column,
+                color=cohort_column if cohort_column else None,
+                markers=True,
+                title="Customer Retention by Cohort"
             )
 
-        st.subheader("📈 Retention Visualization")
+            st.plotly_chart(fig, use_container_width=True)
 
-        show_image(
-            "cohort_retention.png",
-            "Customer Cohort Retention"
-        )
+        elif cohort_column:
+
+            numeric_columns = filtered_cohort.select_dtypes(
+                include="number"
+            ).columns.tolist()
+
+            if numeric_columns:
+
+                selected_metric = st.selectbox(
+                    "Select Cohort Metric",
+                    numeric_columns,
+                    key="retention_metric_filter"
+                )
+
+                chart_data = (
+                    filtered_cohort.groupby(cohort_column)[selected_metric]
+                    .sum()
+                    .reset_index()
+                )
+
+                fig = px.bar(
+                    chart_data,
+                    x=cohort_column,
+                    y=selected_metric,
+                    title=f"{selected_metric} by Cohort"
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+            else:
+                st.info("No numeric cohort metric is available for charting.")
+
+        else:
+            st.warning(
+                "Could not identify cohort columns. Check cohort_retention.csv."
+            )
 
     else:
         st.warning("Cohort retention report not found.")
 
 
-    st.title("🔄 Customer Retention & Cohort Analysis")
+# ==================================================
+# 6. PRODUCT RECOMMENDATIONS
+# ==================================================
 
-    cohort = load_csv("cohort_retention.csv")
-
-    if cohort is not None:
-        st.subheader("Cohort Retention Data")
-        st.dataframe(cohort, use_container_width=True)
-
-    show_image("cohort_retention.png", "Customer Cohort Retention")
-
-
-# PRODUCT RECOMMENDATIONS PAGE
-
-# PRODUCT RECOMMENDATIONS PAGE
 elif page == "Product Recommendations":
 
     st.title("🛍️ Product Recommendation System")
-    st.write("Search products and explore items frequently purchased together.")
+    st.write("Explore products frequently purchased together.")
 
     recommendations = load_csv("product_recommendations.csv")
     top_products = load_csv("top_products.csv")
 
     if top_products is not None:
         st.subheader("🏆 Top Purchased Products")
-        st.dataframe(top_products, use_container_width=True)
+        show_table(top_products)
 
     if recommendations is not None and not recommendations.empty:
 
-        st.subheader("🔎 Find Product Recommendations")
-
-        # Category filter
-        categories = ["All Categories"] + sorted(
-            recommendations["Product_Category"]
-            .fillna("Unknown")
-            .astype(str)
-            .unique()
-            .tolist()
-        )
-
-        selected_category = st.selectbox(
-            "Select Product Category",
-            categories
-        )
-
-        # Product search
-        search_text = st.text_input(
-            "Search Product ID",
-            placeholder="Enter product ID..."
-        )
+        category_column = find_column(recommendations, "Product_Category")
+        product_column = find_column(recommendations, "Product_ID")
 
         filtered = recommendations.copy()
 
-        if selected_category != "All Categories":
-            filtered = filtered[
-                filtered["Product_Category"].fillna("Unknown")
-                == selected_category
-            ]
+        if category_column:
 
-        if search_text.strip():
-            filtered = filtered[
-                filtered["Product_ID"].astype(str).str.contains(
-                    search_text.strip(),
-                    case=False,
-                    na=False
-                )
-            ]
+            categories = ["All Categories"] + sorted(
+                recommendations[category_column]
+                .fillna("Unknown")
+                .astype(str)
+                .unique()
+                .tolist()
+            )
+
+            selected_category = st.selectbox(
+                "Select Product Category",
+                categories,
+                key="recommendation_category_filter"
+            )
+
+            if selected_category != "All Categories":
+                filtered = filtered[
+                    filtered[category_column].fillna("Unknown").astype(str)
+                    == selected_category
+                ]
+
+        if product_column:
+
+            search = st.text_input(
+                "Search Product ID",
+                placeholder="Enter product ID..."
+            )
+
+            if search.strip():
+                filtered = filtered[
+                    filtered[product_column].astype(str).str.contains(
+                        search.strip(),
+                        case=False,
+                        na=False
+                    )
+                ]
 
         st.metric("Matching Recommendations", f"{len(filtered):,}")
 
         st.subheader("Recommended Products")
+        show_table(filtered)
 
-        if not filtered.empty:
-            st.dataframe(
-                filtered,
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.warning("No matching recommendations found.")
+        if category_column:
 
-        # Category chart
-        category_counts = (
-            recommendations["Product_Category"]
-            .fillna("Unknown")
-            .value_counts()
-            .head(10)
-            .reset_index()
-        )
+            st.subheader("📊 Recommendations by Category")
 
-        category_counts.columns = [
-            "Category",
-            "Recommendation Count"
-        ]
-
-        fig = px.bar(
-            category_counts,
-            x="Category",
-            y="Recommendation Count",
-            title="Top Recommended Categories"
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-    else:
-        st.warning("Product recommendation data is not available.")
-
-
-    st.title("🛍️ Product Recommendation System")
-
-    recommendations = load_csv("product_recommendations.csv")
-    top_products = load_csv("top_products.csv")
-
-    if top_products is not None:
-        st.subheader("Top Purchased Products")
-        st.dataframe(top_products, use_container_width=True)
-
-    if recommendations is not None:
-        st.subheader("Recommended Products")
-        st.dataframe(recommendations.head(100), use_container_width=True)
-
-        if "Product_Category" in recommendations.columns:
             category_counts = (
-                recommendations["Product_Category"]
+                filtered[category_column]
                 .fillna("Unknown")
                 .value_counts()
                 .head(10)
                 .reset_index()
             )
-            category_counts.columns = ["Category", "Recommendations"]
 
-            fig = px.bar(
-                category_counts,
-                x="Category",
-                y="Recommendations",
-                title="Top Recommended Categories"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            category_counts.columns = [
+                "Category",
+                "Recommendation Count"
+            ]
+
+            if not category_counts.empty:
+
+                fig = px.bar(
+                    category_counts,
+                    x="Category",
+                    y="Recommendation Count",
+                    title="Recommendations for Selected Category"
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+    else:
+        st.warning("Product recommendation data is not available.")
 
 
-# ANOMALY DETECTION PAGE
+# ==================================================
+# 7. ANOMALY DETECTION
+# ==================================================
 
-# ANOMALY DETECTION PAGE
 elif page == "Anomaly Detection":
 
     st.title("🚨 Anomaly Detection")
-    st.write("Identify unusual patterns in e-commerce orders using Isolation Forest.")
+    st.write("Explore unusual e-commerce order patterns.")
 
     anomalies = load_csv("anomaly_detection_results.csv")
 
     if anomalies is not None and not anomalies.empty:
 
-        total_orders = len(anomalies)
-        unusual_count = (anomalies["Anomaly"] == "Unusual").sum()
-        normal_count = (anomalies["Anomaly"] == "Normal").sum()
-        anomaly_percentage = (
-            unusual_count / total_orders * 100
-            if total_orders else 0
-        )
+        if "Anomaly" in anomalies.columns:
 
-        # KPI CARDS
-        st.subheader("📊 Anomaly Overview")
+            selected_type = st.selectbox(
+                "Filter by Order Type",
+                ["All", "Normal", "Unusual"],
+                key="anomaly_type_filter"
+            )
 
-        c1, c2, c3, c4 = st.columns(4)
+            filtered = anomalies.copy()
 
-        c1.metric("Total Orders", f"{total_orders:,}")
-        c2.metric("Normal Orders", f"{normal_count:,}")
-        c3.metric("Unusual Orders", f"{unusual_count:,}")
-        c4.metric("Anomaly Rate", f"{anomaly_percentage:.2f}%")
+            if selected_type != "All":
+                filtered = filtered[
+                    filtered["Anomaly"] == selected_type
+                ]
 
-        st.divider()
-
-        # PIE CHART
-        st.subheader("Normal vs Unusual Orders")
-
-        counts = anomalies["Anomaly"].value_counts().reset_index()
-        counts.columns = ["Order Type", "Count"]
-
-        fig = px.pie(
-            counts,
-            names="Order Type",
-            values="Count",
-            hole=0.45,
-            title="Order Anomaly Distribution"
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        # FILTER
-        st.subheader("🔎 Explore Order Records")
-
-        selected_type = st.selectbox(
-            "Filter by Order Type",
-            ["All", "Normal", "Unusual"]
-        )
-
-        filtered = anomalies.copy()
-
-        if selected_type != "All":
-            filtered = filtered[
-                filtered["Anomaly"] == selected_type
-            ]
-
-        if "order_id" in filtered.columns:
             search = st.text_input(
                 "Search Order ID",
                 placeholder="Enter order ID..."
             )
 
-            if search.strip():
+            if search.strip() and "order_id" in filtered.columns:
                 filtered = filtered[
                     filtered["order_id"].astype(str).str.contains(
                         search.strip(),
@@ -814,57 +804,62 @@ elif page == "Anomaly Detection":
                     )
                 ]
 
-        st.caption(f"Matching orders: {len(filtered):,}")
+            total_orders = len(filtered)
+            unusual_count = (filtered["Anomaly"] == "Unusual").sum()
+            normal_count = (filtered["Anomaly"] == "Normal").sum()
 
-        st.dataframe(
-            filtered.head(200),
-            use_container_width=True,
-            hide_index=True
-        )
+            anomaly_rate = (
+                unusual_count / total_orders * 100
+                if total_orders else 0
+            )
 
-        st.divider()
+            c1, c2, c3, c4 = st.columns(4)
 
-        show_image(
-            "anomaly_detection.png",
-            "Order Anomaly Visualization"
-        )
+            c1.metric("Filtered Orders", f"{total_orders:,}")
+            c2.metric("Normal Orders", f"{normal_count:,}")
+            c3.metric("Unusual Orders", f"{unusual_count:,}")
+            c4.metric("Anomaly Rate", f"{anomaly_rate:.2f}%")
 
-        st.info(
-            "Unusual orders are statistical anomalies, not confirmed fraud."
-        )
+            st.subheader("📊 Filtered Anomaly Distribution")
+
+            counts = (
+                filtered["Anomaly"]
+                .value_counts()
+                .reset_index()
+            )
+
+            counts.columns = ["Order Type", "Count"]
+
+            if not counts.empty:
+
+                fig = px.pie(
+                    counts,
+                    names="Order Type",
+                    values="Count",
+                    hole=0.45,
+                    title="Normal vs Unusual Orders"
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.subheader("Order Details")
+            st.caption(f"Matching orders: {len(filtered):,}")
+            show_table(filtered)
+
+            st.info(
+                "Unusual orders are statistical anomalies, not confirmed fraud."
+            )
+
+        else:
+            st.warning("Anomaly column is missing from the dataset.")
 
     else:
         st.warning("Anomaly detection report not found.")
 
 
-    st.title("🚨 Anomaly Detection")
-
-    anomalies = load_csv("anomaly_detection_results.csv")
-
-    if anomalies is not None and "Anomaly" in anomalies.columns:
-
-        counts = anomalies["Anomaly"].value_counts()
-
-        col1, col2 = st.columns(2)
-        col1.metric("Total Orders", f"{len(anomalies):,}")
-        col2.metric(
-            "Unusual Orders",
-            f"{(anomalies['Anomaly'] == 'Unusual').sum():,}"
-        )
-
-        fig = px.pie(
-            names=counts.index,
-            values=counts.values,
-            title="Normal vs Unusual Orders"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("Unusual Order Details")
-        unusual = anomalies[anomalies["Anomaly"] == "Unusual"]
-        st.dataframe(unusual.head(100), use_container_width=True)
-
-    show_image("anomaly_detection.png", "Anomaly Detection Visualization")
-
+# --------------------------------------------------
+# FOOTER
+# --------------------------------------------------
 
 st.sidebar.divider()
-st.sidebar.caption("ShopSense AI | Academic Portfolio Project")
+st.sidebar.caption("ShopSense AI | E-Commerce Intelligence Platform")
