@@ -1,3 +1,6 @@
-﻿streamlit
-pandas
-plotly
+﻿streamlit==1.67.0
+pandas==3.1.1
+plotly==7.1.0
+scikit-learn==1.9.1
+xgboost==3.4.1
+joblib==1.6.0

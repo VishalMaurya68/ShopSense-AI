@@ -388,6 +388,80 @@ elif page == "Delivery Prediction":
     st.title("🚚 Delivery Delay Prediction")
     st.write("Explore delivery model results and important prediction features.")
 
+    # LIVE DELIVERY PREDICTION
+    import joblib
+
+    st.divider()
+    st.subheader("🚀 Try Live Delivery Prediction")
+    st.caption("Enter order details to estimate the probability of delivery delay.")
+
+    with st.form("delivery_prediction_form"):
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            purchase_year = st.number_input("Purchase Year", 2016, 2018, 2018)
+            purchase_month = st.number_input("Purchase Month", 1, 12, 6)
+            purchase_day = st.number_input("Purchase Day", 1, 31, 15)
+            purchase_weekday = st.number_input("Purchase Weekday (0=Monday)", 0, 6, 2)
+            purchase_hour = st.number_input("Purchase Hour", 0, 23, 12)
+            estimated_delivery_days = st.number_input("Estimated Delivery Days", 1, 60, 15)
+            item_count = st.number_input("Item Count", 1, 100, 1)
+
+        with col2:
+            total_price = st.number_input("Total Product Price (BRL)", min_value=0.0, value=150.0)
+            total_freight = st.number_input("Total Freight (BRL)", min_value=0.0, value=20.0)
+            payment_value = st.number_input("Payment Value (BRL)", min_value=0.0, value=170.0)
+            payment_installments = st.number_input("Payment Installments", 1, 24, 1)
+            customer_state = st.text_input("Customer State", value="SP")
+            seller_state = st.text_input("Seller State", value="SP")
+            product_category = st.text_input("Product Category", value="beleza_saude")
+
+        submitted = st.form_submit_button("Predict Delivery Status")
+
+    if submitted:
+        try:
+            model_path = BASE_DIR / "models" / "delivery_xgboost_model.joblib"
+            model_bundle = joblib.load(model_path)
+
+            input_data = pd.DataFrame([{
+                "purchase_year": purchase_year,
+                "purchase_month": purchase_month,
+                "purchase_day": purchase_day,
+                "purchase_weekday": purchase_weekday,
+                "estimated_delivery_days": estimated_delivery_days,
+                "purchase_hour": purchase_hour,
+                "item_count": item_count,
+                "total_price": total_price,
+                "total_freight": total_freight,
+                "payment_value": payment_value,
+                "payment_installments": payment_installments,
+                "customer_state": customer_state.strip().upper(),
+                "seller_state": seller_state.strip().upper(),
+                "product_category": product_category.strip()
+            }])
+
+            pipeline = model_bundle["pipeline"]
+            threshold = model_bundle["threshold"]
+
+            probability = pipeline.predict_proba(input_data)[0][1]
+            prediction = int(probability >= threshold)
+
+            st.metric("Estimated Late Delivery Probability", f"{probability:.2%}")
+
+            if prediction == 1:
+                st.warning("Model Prediction: Possible Delivery Delay")
+            else:
+                st.success("Model Prediction: Likely On-Time Delivery")
+
+            st.caption(f"Classification threshold: {threshold:.4f}")
+
+        except FileNotFoundError:
+            st.error("Model file not found. Please check the models folder.")
+        except Exception as error:
+            st.error(f"Prediction error: {error}")
+
+
     predictions = load_csv("delivery_xgboost_predictions.csv")
     importance = load_csv("delivery_feature_importance.csv")
 

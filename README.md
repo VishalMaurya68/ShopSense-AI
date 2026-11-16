@@ -77,6 +77,43 @@ ShopSense-AI/
 
 To develop practical skills in data cleaning, exploratory data analysis, SQL, machine learning, customer analytics, model evaluation, and dashboard development.
 
+## 🚀 Live Delivery Delay Prediction
+
+ShopSense AI includes an interactive XGBoost-based delivery delay prediction feature in the Streamlit dashboard.
+
+Users can enter 14 order-related inputs:
+- Purchase year, month, day, weekday and hour
+- Estimated delivery days
+- Item count
+- Total product price
+- Total freight
+- Payment value
+- Payment installments
+- Customer state
+- Seller state
+- Product category
+
+The saved preprocessing pipeline and XGBoost model generate a late-delivery probability. A classification threshold of approximately 0.5739 is used to classify the prediction.
+
+**Limitation:** The model has modest test performance. Its predictions are experimental and are not guaranteed delivery outcomes.
+
+## 💻 Run Locally
+
+1. Clone the repository:
+   `git clone https://github.com/VishalMaurya68/ShopSense-AI.git`
+2. Open the project folder:
+   `cd ShopSense-AI`
+3. Create a virtual environment:
+   `python -m venv venv`
+4. Activate it on Windows:
+   `venv\Scripts\activate`
+5. Install dependencies:
+   `pip install -r requirements.txt`
+6. Run the dashboard:
+   `streamlit run app.py`
+
+**Note:** Live delivery prediction also requires `models/delivery_xgboost_model.joblib`.
+
 ## 👨‍💻 Author
 
 **Vishal Maurya**
